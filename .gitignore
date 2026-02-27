@@ -1,0 +1,32 @@
+# Compiled binaries
+nmod-cleaner
+nmod-cleaner.exe
+*.exe
+*.out
+
+# Build output directories
+dist/
+bin/
+
+# Go workspace files
+go.work
+go.work.sum
+
+# Test output
+*.test
+*.prof
+coverage.out
+coverage.html
+
+# Environment files
+.env
+.env.local
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
