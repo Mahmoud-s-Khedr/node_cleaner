@@ -1,6 +1,5 @@
 # NmodCleaner
 
-[![CI](https://github.com/Mahmoud-s-Khedr/nmod-cleaner/actions/workflows/ci.yml/badge.svg)](https://github.com/Mahmoud-s-Khedr/nmod-cleaner/actions/workflows/ci.yml)
 [![Go Version](https://img.shields.io/badge/go-1.25+-blue)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
