@@ -31,9 +31,11 @@ NmodCleaner was originally rewritten in **Go** after encountering `heap out of m
 | ⚡ **Concurrent analysis** | Goroutines calculate `node_modules` sizes in parallel |
 | 🎛️ **Interactive TUI** | Beautiful multi-select checklist powered by [charmbracelet/huh](https://github.com/charmbracelet/huh), sorted by disk usage |
 | 🧪 **Dry-run mode** | Preview deletions and space savings before touching anything |
-| 📦 **pnpm-aware** | Automatically skips directories already managed by pnpm |
-| 🚀 **Parallel cleanup** | Deletes and reinstalls all selected projects concurrently |
+| 📦 **Multi-manager support** | Auto-detects `pnpm`, `yarn`, or `npm` per project via lock files |
+| 🚀 **Parallel cleanup with progress** | Live per-project Bubbletea progress TUI during concurrent delete + reinstall |
 | 🛡️ **Safe path filtering** | Skips hidden dirs, `dist/`, `build/`, and system paths (`/usr/lib`, `/snap/`, etc.) |
+| ⚙️ **Config file** | Persist a project skip-list in `~/.nmodcleanerrc` |
+| 📊 **Stats history** | Track and display cumulative disk space freed with `--history` |
 
 ---
 
@@ -68,6 +70,7 @@ Disk Space Freed:    1.14 GB
 - **[Go](https://go.dev)** — Core language; chosen for performance and low memory footprint
 - **[Cobra](https://github.com/spf13/cobra)** — CLI framework for flag parsing and command structure
 - **[charmbracelet/huh](https://github.com/charmbracelet/huh)** — Terminal forms and interactive multi-select UI
+- **[charmbracelet/bubbletea](https://github.com/charmbracelet/bubbletea)** — Live per-project progress TUI
 - **[charmbracelet/lipgloss](https://github.com/charmbracelet/lipgloss)** — Rich terminal styling (colors, bold, icons)
 - **[briandowns/spinner](https://github.com/briandowns/spinner)** — Animated progress spinners
 
@@ -127,7 +130,42 @@ nmod-cleaner --dry-run
 |------|-------|---------|-------------|
 | `--path` | `-p` | current directory | Directory to scan for `node_modules` |
 | `--dry-run` | `-d` | `false` | Simulate execution, print space savings |
+| `--config` | | `~/.nmodcleanerrc` | Path to config file with project skip-list |
+| `--history` | | | Print cumulative stats history and exit |
 | `--help` | `-h` | | Display help |
+
+### Config File
+
+Create `~/.nmodcleanerrc` (JSON) to permanently skip specific project paths:
+
+```json
+{
+  "skipPaths": [
+    "/home/user/work/dont-touch-this",
+    "/home/user/archived-projects"
+  ]
+}
+```
+
+Paths support both exact matches and prefix matches, so a directory and all its subdirectories can be skipped at once.
+
+### Stats History
+
+After each run, stats are automatically saved to `~/.nmod-cleaner-history.json`. View your cumulative totals:
+
+```bash
+nmod-cleaner --history
+```
+
+```
+--- Stats History ---
+Date                            Cleaned   Failed        Freed
+─────────────────────────────────────────────────────
+2026-03-05 10:12:04                   3        0      1.14 GB
+2026-03-05 14:30:21                   5        1      2.80 GB
+─────────────────────────────────────────────────────
+TOTAL (2 runs)                        8        1      3.94 GB
+```
 
 ---
 
@@ -160,33 +198,43 @@ node_cleaner/
 │   └── root.go               # CLI command definition, flag wiring, orchestration
 └── internal/
     ├── scanner/
-    │   └── scanner.go        # Filesystem traversal, pnpm detection, path filtering
+    │   └── scanner.go        # Filesystem traversal, package manager detection, path filtering
     ├── analyzer/
     │   └── analyzer.go       # Concurrent disk-usage calculation, byte formatting
     ├── cleaner/
     │   └── cleaner.go        # node_modules deletion
     ├── installer/
-    │   └── installer.go      # pnpm install execution
+    │   └── installer.go      # npm / yarn / pnpm install execution
+    ├── config/
+    │   └── config.go         # .nmodcleanerrc loader and project skip-list
+    ├── history/
+    │   └── history.go        # Append-only run history and cumulative stats
     └── ui/
-        └── prompt.go         # TUI prompt (huh), lipgloss styles, summary printing
+        └── prompt.go         # TUI prompt (huh), Bubbletea progress view, lipgloss styles
 ```
 
 ---
 
 ## Known Limitations
 
-- Reinstallation requires `pnpm`; projects using only `npm` or `yarn` will be cleaned but require manual reinstallation
-- Tested on **Linux** and **macOS**; Windows support is untested
+- On Windows, `pnpm`, `npm`, and `yarn` must be installed and available in `PATH` as their `.cmd` wrappers
+- Cross-platform path handling is tested on Linux and macOS; Windows CI is provided via GitHub Actions
 
 ---
 
 ## 🗺️ Roadmap
 
-- [ ] **npm / yarn support** — auto-detect package manager per project and use the correct reinstall command  
-- [ ] **Progress bars** — per-project live TUI progress during concurrent cleanup  
-- [ ] **Windows support** — test and fix path handling for Windows  
-- [ ] **Config file** — skip-list for specific project paths via `.nmodcleanerrc`  
-- [ ] **Stats history** — track and display cumulative disk space freed over time  
+All planned features from the initial roadmap have been implemented:
+
+| # | Feature | Status |
+|---|---|---|
+| 1 | **npm / yarn support** | ✅ Implemented |
+| 2 | **Progress bars** | ✅ Implemented |
+| 3 | **Windows support** | ✅ Implemented |
+| 4 | **Config file** | ✅ Implemented |
+| 5 | **Stats history** | ✅ Implemented |
+
+> Have a new idea? [Open an issue](https://github.com/Mahmoud-s-Khedr/node_cleaner/issues) or see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 

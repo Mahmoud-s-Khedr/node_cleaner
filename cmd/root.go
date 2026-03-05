@@ -4,15 +4,14 @@ import (
 	"fmt"
 	"nmod-cleaner/internal/analyzer"
 	"nmod-cleaner/internal/cleaner"
+	"nmod-cleaner/internal/config"
+	"nmod-cleaner/internal/history"
 	"nmod-cleaner/internal/installer"
 	"nmod-cleaner/internal/scanner"
 	"nmod-cleaner/internal/ui"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/briandowns/spinner"
@@ -20,8 +19,10 @@ import (
 )
 
 var (
-	isDryRun bool
-	scanPath string
+	isDryRun    bool
+	scanPath    string
+	configPath  string
+	showHistory bool
 )
 
 func NewSpinner(msg string) *spinner.Spinner {
@@ -32,17 +33,29 @@ func NewSpinner(msg string) *spinner.Spinner {
 
 var rootCmd = &cobra.Command{
 	Use:   "nmod-cleaner",
-	Short: "A CLI to safely remove bloated node_modules and reinstall dependencies using pnpm.",
+	Short: "A CLI to safely remove bloated node_modules and reinstall dependencies.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if _, err := exec.LookPath("pnpm"); err != nil {
-			ui.PrintError("pnpm is not installed or not in your PATH.")
-			ui.PrintInfo("Install it from https://pnpm.io/installation and try again.")
+		// ── Feature 5: --history flag ─────────────────────────────────
+		if showHistory {
+			records, err := history.Load()
+			if err != nil {
+				ui.PrintError(fmt.Sprintf("Failed to load history: %v", err))
+				return nil
+			}
+			history.PrintSummary(records)
 			return nil
 		}
 
 		absPath, err := filepath.Abs(scanPath)
 		if err != nil {
 			return err
+		}
+
+		// ── Feature 4: load config ────────────────────────────────────
+		cfg, err := config.Load(configPath)
+		if err != nil {
+			ui.PrintError(fmt.Sprintf("Failed to load config: %v", err))
+			return nil
 		}
 
 		s := NewSpinner(fmt.Sprintf("Scanning for node_modules in %s...", absPath))
@@ -63,15 +76,21 @@ var rootCmd = &cobra.Command{
 			return nil
 		}
 
+		// Filter: skip pnpm-managed and config skip-listed projects.
 		var unoptimizedResults []scanner.ScanResult
 		for _, r := range scanResults {
-			if !r.IsPnpm {
-				unoptimizedResults = append(unoptimizedResults, r)
+			if r.IsPnpm {
+				continue
 			}
+			if cfg.ShouldSkip(r.ProjectPath) {
+				ui.PrintInfo(fmt.Sprintf("Skipping (config): %s", r.ProjectPath))
+				continue
+			}
+			unoptimizedResults = append(unoptimizedResults, r)
 		}
 
 		if len(unoptimizedResults) == 0 {
-			ui.PrintInfo("All found node_modules directories are already optimally managed by pnpm. No cleanup needed!")
+			ui.PrintInfo("No cleanup needed — all node_modules are either pnpm-managed or on your skip-list.")
 			return nil
 		}
 
@@ -108,64 +127,45 @@ var rootCmd = &cobra.Command{
 			return nil
 		}
 
-		var totalSaved int64
-		var deletedCount int32
-		var failedCount int32
-
+		// ── Dry-run mode ──────────────────────────────────────────────
 		if isDryRun {
 			ui.PrintInfo(ui.BoldStyle.Render("\n--- DRY RUN MODE ---"))
+			var totalSaved int64
+			var count int32
 			for _, target := range selectedTargets {
 				ui.PrintInfo(fmt.Sprintf("Would delete: %s", target.NodeModulesPath))
-				ui.PrintInfo(fmt.Sprintf("Would run pnpm install in: %s", target.ProjectPath))
+				ui.PrintInfo(fmt.Sprintf("Would run '%s install' in: %s", target.PackageManager, target.ProjectPath))
 				totalSaved += target.Size
-				deletedCount++
+				count++
 			}
-			ui.PrintSummary(int(deletedCount), 0, totalSaved)
+			ui.PrintSummary(int(count), 0, totalSaved)
 			return nil
 		}
 
+		// ── Live cleanup with progress TUI (Feature 2) ────────────────
 		fmt.Println("")
-		ui.PrintInfo(fmt.Sprintf("Starting concurrent processing for %d projects...", len(selectedTargets)))
 
-		var wg sync.WaitGroup
-		var mu sync.Mutex
-
-		for _, t := range selectedTargets {
-			wg.Add(1)
-			go func(target ui.CleanableTarget) {
-				defer wg.Done()
-
-				err := cleaner.DeleteNodeModules(target.NodeModulesPath)
-				if err != nil {
-					mu.Lock()
-					ui.PrintError(fmt.Sprintf("Delete failed for %s: %v", target.NodeModulesPath, err))
-					mu.Unlock()
-					atomic.AddInt32(&failedCount, 1)
-					return
-				}
-
-				err = installer.RunPnpmInstall(target.ProjectPath)
-				if err != nil {
-					mu.Lock()
-					ui.PrintError(fmt.Sprintf("Install failed for %s: %v", target.ProjectPath, err))
-					mu.Unlock()
-					atomic.AddInt32(&failedCount, 1)
-					return
-				}
-
-				mu.Lock()
-				ui.PrintSuccess(fmt.Sprintf("Cleaned and reinstalled: %s", target.ProjectPath))
-				mu.Unlock()
-
-				atomic.AddInt64(&totalSaved, target.Size)
-				atomic.AddInt32(&deletedCount, 1)
-			}(t)
+		processFn := func(target ui.CleanableTarget) (int64, error) {
+			if err := cleaner.DeleteNodeModules(target.NodeModulesPath); err != nil {
+				return 0, fmt.Errorf("delete failed for %s: %w", target.NodeModulesPath, err)
+			}
+			if err := installer.RunInstall(target.ProjectPath, target.PackageManager); err != nil {
+				return 0, fmt.Errorf("install failed for %s: %w", target.ProjectPath, err)
+			}
+			return target.Size, nil
 		}
 
-		wg.Wait()
-
-		ui.PrintSummary(int(deletedCount), int(failedCount), totalSaved)
+		succeeded, failed, savedBytes := ui.RunProgressView(selectedTargets, processFn)
+		ui.PrintSummary(succeeded, failed, savedBytes)
 		ui.PrintSuccess("Cleanup and reinstallation complete!")
+
+		// ── Feature 5: persist run to history ─────────────────────────
+		_ = history.Append(history.Record{
+			Timestamp:  time.Now(),
+			DirsClean:  succeeded,
+			DirsFailed: failed,
+			BytesFreed: savedBytes,
+		})
 
 		return nil
 	},
@@ -182,4 +182,6 @@ func init() {
 	cwd, _ := os.Getwd()
 	rootCmd.Flags().BoolVarP(&isDryRun, "dry-run", "d", false, "simulate deletion without modifying the file system")
 	rootCmd.Flags().StringVarP(&scanPath, "path", "p", cwd, "directory to scan for node_modules")
+	rootCmd.Flags().StringVar(&configPath, "config", "", "path to config file (default: ~/.nmodcleanerrc)")
+	rootCmd.Flags().BoolVar(&showHistory, "history", false, "print cumulative stats history and exit")
 }

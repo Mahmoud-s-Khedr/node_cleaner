@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -12,6 +13,7 @@ type ScanResult struct {
 	ProjectPath     string
 	NodeModulesPath string
 	IsPnpm          bool
+	PackageManager  string // "pnpm", "yarn", "npm"
 }
 
 // shouldSkip checks against common heavy or system directories we don't need to traverse
@@ -26,17 +28,28 @@ func shouldSkip(name string) bool {
 	return skipDirs[name]
 }
 
-// shouldSkipPath checks if the absolute path falls under known system directories
-// that should never contain user-managed node_modules.
-func shouldSkipPath(path string) bool {
-	restrictedSubstrings := []string{
+// restrictedPaths returns OS-specific paths that should never contain user-managed node_modules.
+func restrictedPaths() []string {
+	if runtime.GOOS == "windows" {
+		return []string{
+			`C:\Windows`,
+			`C:\Program Files`,
+			`C:\Program Files (x86)`,
+		}
+	}
+	// Linux / macOS
+	return []string{
 		"/usr/lib",
 		"/usr/share",
 		"/var/lib/flatpak",
 		"/snap/",
 	}
+}
 
-	for _, restricted := range restrictedSubstrings {
+// shouldSkipPath checks if the absolute path falls under known system directories
+// that should never contain user-managed node_modules.
+func shouldSkipPath(path string) bool {
+	for _, restricted := range restrictedPaths() {
 		if strings.Contains(path, restricted) {
 			return true
 		}
@@ -44,15 +57,28 @@ func shouldSkipPath(path string) bool {
 	return false
 }
 
-// isPnpmManaged checks if a directory contains pnpm optimization signatures
-func isPnpmManaged(modPath string, projPath string) bool {
+// DetectPackageManager inspects the project directory for lock files to decide
+// which package manager owns the project. Priority: pnpm > yarn > npm.
+func DetectPackageManager(modPath string, projPath string) string {
 	if _, err := os.Stat(filepath.Join(modPath, ".modules.yaml")); err == nil {
-		return true
+		return "pnpm"
 	}
 	if _, err := os.Stat(filepath.Join(projPath, "pnpm-lock.yaml")); err == nil {
-		return true
+		return "pnpm"
 	}
-	return false
+	if _, err := os.Stat(filepath.Join(projPath, "yarn.lock")); err == nil {
+		return "yarn"
+	}
+	if _, err := os.Stat(filepath.Join(projPath, "package-lock.json")); err == nil {
+		return "npm"
+	}
+	// Fallback: if there is a package.json we default to npm
+	return "npm"
+}
+
+// isPnpmManaged checks if a directory contains pnpm optimization signatures
+func isPnpmManaged(modPath string, projPath string) bool {
+	return DetectPackageManager(modPath, projPath) == "pnpm"
 }
 
 // FindNodeModules securely walks down the filesystem starting at root
@@ -92,12 +118,13 @@ func FindNodeModules(root string) ([]ScanResult, error) {
 
 		if dirName == "node_modules" {
 			projectPath := filepath.Dir(path)
-			isPnpm := isPnpmManaged(path, projectPath)
+			pm := DetectPackageManager(path, projectPath)
 
 			results = append(results, ScanResult{
 				ProjectPath:     projectPath,
 				NodeModulesPath: path,
-				IsPnpm:          isPnpm,
+				IsPnpm:          pm == "pnpm",
+				PackageManager:  pm,
 			})
 
 			// Skip going deeper inside this node_modules

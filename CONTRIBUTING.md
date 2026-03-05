@@ -44,7 +44,9 @@ node_cleaner/
     ├── analyzer/             # Concurrent disk-usage calculation
     ├── cleaner/              # node_modules deletion
     ├── installer/            # pnpm install execution
-    └── ui/                   # TUI prompt and terminal styles
+    ├── ui/                   # TUI prompt and terminal styles
+    ├── config/               # (planned) .nmodcleanerrc skip-list loader
+    └── history/              # (planned) append-only run history and cumulative stats
 ```
 
 The core pipeline is defined in `cmd/root.go`. Each package in `internal/` is deliberately small and single-responsibility, making it easy to extend or swap components.
@@ -63,11 +65,28 @@ The core pipeline is defined in `cmd/root.go`. Each package in `internal/` is de
    ```bash
    go build -o nmod-cleaner . && ./nmod-cleaner --dry-run
    ```
-5. Commit with a clear, descriptive message:
+5. Run `go vet ./...` to catch any static issues
+6. Commit with a clear, descriptive message:
    ```bash
    git commit -m "feat: add yarn support for reinstallation"
    ```
-6. Push your branch and open a Pull Request against `main`
+7. Push your branch and open a Pull Request against `main`
+
+---
+
+## Roadmap Contributions
+
+The following features are planned and available for contribution. Each is scoped to a small set of files so they are good isolated tasks.
+
+| Feature | Key files | Complexity |
+|---|---|---|
+| **npm / yarn support** | `internal/installer/installer.go`, `internal/scanner/scanner.go`, `cmd/root.go` | Medium |
+| **Progress bars** | `internal/ui/prompt.go`, `cmd/root.go` | Medium |
+| **Windows support** | `internal/scanner/scanner.go`, `internal/installer/installer.go` | Low |
+| **Config file** | `internal/config/config.go` *(new)*, `cmd/root.go` | Low |
+| **Stats history** | `internal/history/history.go` *(new)*, `cmd/root.go` | Low |
+
+Before starting, open an issue so we can assign it to you and avoid duplicate work.
 
 ---
 
